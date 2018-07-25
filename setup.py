@@ -10,7 +10,7 @@ from setuptools import setup, find_packages
 # import numpy as np
 
 # Package Version
-from regain import __version__ as version
+from network_inference import __version__ as version
 # alignment_module = Extension('icing.align.align',
 #                              sources=['icing/align/alignment.c'])
 setup(
