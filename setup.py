@@ -1,5 +1,5 @@
 #!/usr/bin/python
-"""regain setup script.
+"""inning setup script.
 
 Author: Veronica Tozzo
 Copyright (c) 2018, Veronica Tozzo.
@@ -9,13 +9,8 @@ Licensed under the BSD 3-Clause License (see LICENSE.txt).
 from setuptools import setup, find_packages
 # import numpy as np
 
-# Package Version
-from network_inference import __version__ as version
-# alignment_module = Extension('icing.align.align',
-#                              sources=['icing/align/alignment.c'])
 setup(
-    name='regain',
-    version=version,
+    name='inning',
 
     description=('INNINg (INtegrated Network INference)'),
     long_description=open('README.md').read(),
@@ -24,8 +19,6 @@ setup(
     maintainer='Veronica Tozzo',
     maintainer_email='veronica.tozzo@dibris.unige.it',
     url='https://github.com/veronicatozzo/inning',
-    download_url='https://github.com/veronicatozzo/inning/archive/'
-                 'v%s.tar.gz' % version,
     keywords=['graph inference', 'data integration'],
     classifiers=[
         'Development Status :: 1 - Beta',
