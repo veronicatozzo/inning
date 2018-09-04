@@ -10,7 +10,7 @@ from six.moves import map, range, zip
 from sklearn.covariance import empirical_covariance
 from sklearn.covariance import GraphLasso
 from sklearn.utils.extmath import fast_logdet  # , squared_norm
-from sklearn.utils.validation import check_array
+from sklearn.utils.validation import check_array, check_random_state
 # from sklearn.utils.validation import check_symmetric
 
 from network_inference.utils import check_data_dimensions, convergence, update_rho
@@ -23,7 +23,7 @@ def log_likelihood(emp_cov, precision):
     return fast_logdet(precision) - np.sum(emp_cov * precision)
 
 
-def objective(emp_cov, K1, K2, A1, A2, R, alpha1, alpha1, tau, rho) : # TODO
+def objective(emp_cov, K1, K2, A1, A2, R, alpha1, alpha2, tau, rho) : # TODO
     """Objective function for time-varying graphical lasso."""
     obj = np.sum(-n * log_likelihood(emp_cov, precision)
                  for emp_cov, precision, n in zip(S, K, n_samples))
@@ -47,7 +47,6 @@ def _R_update(K1, K2, A1, A2, R, U1, U2, rho, tau, max_iter):
 
         R = R - gamma*gradient
         R = soft_thresholding_sign(R, tau*gamma)
-
         if np.linalg.norm(R_old - R)/np.linalg.norm(R) < 1e-5:
             break
     else:
@@ -58,7 +57,8 @@ def _R_update(K1, K2, A1, A2, R, U1, U2, rho, tau, max_iter):
 def two_layers_graphical_lasso(
         data_list, alpha1=0.01, alpha2=0.01, tau=0.01, mode='admm', rho=1.,
         tol=1e-3, rtol=1e-5, max_iter=100, verbose=False, return_n_iter=True,
-        return_history=False, compute_objective=False, compute_emp_cov=False):
+        return_history=False, compute_objective=False, compute_emp_cov=False,
+        random_state=None, n1=None, n2=None):
     """Time-varying graphical lasso solver.
 
     Solves the following problem via ADMM:
@@ -116,7 +116,9 @@ def two_layers_graphical_lasso(
         for the primal and dual residual norms at each iteration.
     """
 
+    random_state = check_random_state(random_state)
     if compute_emp_cov:
+        n1, n2 = [data_list[i].shape[0] for i in range(len(data_list))]
         emp_cov = [empirical_covariance(
             x, assume_centered=False) for x in data_list]
     else:
@@ -126,7 +128,7 @@ def two_layers_graphical_lasso(
     A2 = emp_cov[1].copy()
     K1 = np.zeros_like(emp_cov[0])
     K2 = np.zeros_like(emp_cov[1])
-    R = np.zeros((K1.shape[0], K2.shape[0]))
+    R = random_state.rand(K1.shape[0], K2.shape[0])
     U1 = K1.copy()
     U2 = K2.copy()
 
@@ -136,32 +138,32 @@ def two_layers_graphical_lasso(
         A2_old = A2.copy()
 
         # update K1
-        M = A1 + np.linalg.multidot(R, np.linalg.pinv(K2), R.T) - U1
+        M = A1 + np.linalg.multi_dot((R, np.linalg.pinv(K2), R.T)) + U1
         K1 = soft_thresholding_od(M, lamda=alpha1 / rho)
-
-        # update K1
-        M = A2 + np.linalg.multidot(R.T, np.linalg.pinv(K1), R) - U2
+        print(K1)
+        # update K2
+        M = A2 + np.linalg.multi_dot((R.T, np.linalg.pinv(K1), R)) + U2
         K2 = soft_thresholding_od(M, lamda=alpha2 / rho)
 
         # update A1
-        M = K1 - np.linalg.multidot((R, np.linalg.pinv(K2), R.T)) - U1
+        M = K1 - np.linalg.multi_dot((R, np.linalg.pinv(K2), R.T)) + U1
         M += M.T
         M /= 2.
-        A1 = prox_logdet(data_list[0] - rho * M, lamda=1. / rho)
+        A1 = prox_logdet(data_list[0] - rho * M, lamda=1. / (rho*n1))
 
         # update A2
-        M = K2 - np.linalg.multidot((R.T, np.linalg.pinv(K1), R)) - U2
+        M = K2 - np.linalg.multi_dot((R.T, np.linalg.pinv(K1), R)) + U2
         M += M.T
         M /= 2.
-        A2 = prox_logdet(data_list[1] - rho * M, lamda=1. / rho)
+        A2 = prox_logdet(data_list[1] - rho * M, lamda=1. / (rho*n2))
 
         # update R
         R = _R_update(K1, K2, A1, A2, R, U1, U2, rho, tau,
-                      max_iter=max_iter-iteration_)
+                      max_iter=500)
 
         # update residuals
-        RK2R = np.linalg.multidot((R, np.linalg.pinv(K2), R.T))
-        RK1R = np.linalg.multidot((R.T, np.linalg.pinv(K1), R))
+        RK2R = np.linalg.multi_dot((R, np.linalg.pinv(K2), R.T))
+        RK1R = np.linalg.multi_dot((R.T, np.linalg.pinv(K1), R))
         U1 += A1 - K1 + RK2R
         U2 += A2 - K2 + RK1R
 
@@ -206,7 +208,7 @@ def two_layers_graphical_lasso(
     return return_list
 
 
-class TwoLayersIntegratedGraphicalLasso(GraphLasso):
+class TwoLayersGraphicalLasso(GraphLasso):
     """Sparse inverse covariance estimation with an l1-penalized estimator.
 
     Parameters
@@ -285,7 +287,8 @@ class TwoLayersIntegratedGraphicalLasso(GraphLasso):
 
     def __init__(self, alpha1=0.01, alpha2=0.01, tau=0.01, mode='admm', rho=1.,
                  tol=1e-4, rtol=1e-4, max_iter=100,
-                 verbose=False, assume_centered=False, compute_objective=True):
+                 verbose=False, assume_centered=False, compute_objective=False,
+                 random_state=None):
         super(GraphLasso, self).__init__(
             tol=tol, max_iter=max_iter, verbose=verbose,
             assume_centered=assume_centered, mode=mode)
@@ -295,8 +298,16 @@ class TwoLayersIntegratedGraphicalLasso(GraphLasso):
         self.rho = rho
         self.rtol = rtol
         self.compute_objective = compute_objective
+        self.random_state = random_state
         self.covariance1_ = None
         self.covariance2_ = None
+        self.precision1_ = None
+        self.precision2_ = None
+        self.R_ = None
+        self.observed1_ = None
+        self.observed2_ = None
+        self.emp_cov = None
+        self.n_iter_ = None
 
     def get_precision(self):
         """Getter for the observed global precision matrix.
@@ -335,7 +346,7 @@ class TwoLayersIntegratedGraphicalLasso(GraphLasso):
             Data from which to compute the covariance estimates.
         y : (ignored)
         """
-
+        self.random_state = check_random_state(self.random_state)
         check_data_dimensions(X, layers=2)
         X = [check_array(x, ensure_min_features=2,
                          ensure_min_samples=2, estimator=self) for x in X]
@@ -345,7 +356,7 @@ class TwoLayersIntegratedGraphicalLasso(GraphLasso):
             self.location1_ = np.zeros((X[0].shape[0],  X[0].shape[1]))
             self.location2_ = np.zeros((X[1].shape[0],  X[1].shape[1]))
         else:
-            self.location1_ = X[0].mean(1).reshape(X[0].shape[0],
+            self.location1_ = X[0].mean(1).reshape(X[0].shape[0], # TODO non sono sicura che sia la direzione giusta
                                                    X[0].shape[1])
             self.location2_ = X[1].mean(1).reshape(X[1].shape[0],
                                                    X[1].shape[1])
@@ -357,11 +368,12 @@ class TwoLayersIntegratedGraphicalLasso(GraphLasso):
         self.n_iter_ = \
             two_layers_graphical_lasso(
                 emp_cov, alpha1=self.alpha1, alpha2=self.alpha2,
-                mu=self.mu, mode=self.mode, rho=self.rho,
+                tau=self.tau, mode=self.mode, rho=self.rho,
                 tol=self.tol, rtol=self.rtol,
                 max_iter=self.max_iter, verbose=self.verbose,
                 return_n_iter=True, return_history=False,
-                compute_objective=self.compute_objective)
+                compute_objective=self.compute_objective,
+                n1=X[0].shape[0], n2=X[1].shape[0])
         return self
 
     # TODO: potrebbe essere che va cambiato con funzioni piu' fighe
