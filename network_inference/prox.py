@@ -12,7 +12,7 @@ def soft_thresholding_sign(a, lamda):
     """Soft-thresholding."""
     return np.sign(a) * np.maximum(np.abs(a) - lamda, 0)
 
-    
+
 def soft_thresholding_od(a, lamda):
     """Off-diagonal soft-thresholding."""
     if a.ndim > 2:

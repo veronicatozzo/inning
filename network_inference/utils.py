@@ -1,10 +1,17 @@
 import sys
 
+import numpy as np
+
 from collections import namedtuple
 
 
 convergence = namedtuple('convergence',
                          ('obj', 'rnorm', 'snorm', 'e_pri', 'e_dual'))
+
+
+def l1_od_norm(precision):
+    """L1 norm off-diagonal."""
+    return np.abs(precision).sum() - np.abs(np.diag(precision)).sum()
 
 
 def check_data_dimensions(X, layers=2):

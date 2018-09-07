@@ -6,16 +6,18 @@ import warnings
 import sys
 
 # from functools import partial
-from six.moves import map, range, zip
 from sklearn.covariance import empirical_covariance
-from sklearn.covariance import GraphLasso
+from sklearn.covariance import GraphicalLasso
 from sklearn.utils.extmath import fast_logdet  # , squared_norm
 from sklearn.utils.validation import check_array, check_random_state
 # from sklearn.utils.validation import check_symmetric
 
-from network_inference.utils import check_data_dimensions, convergence, update_rho
+from network_inference.utils import check_data_dimensions, convergence, \
+                                    update_rho, l1_od_norm
 from network_inference.prox import prox_logdet, soft_thresholding_od, \
                                     soft_thresholding_sign
+
+from network_inference.datasets import is_pos_def
 
 
 def log_likelihood(emp_cov, precision):
@@ -23,35 +25,57 @@ def log_likelihood(emp_cov, precision):
     return fast_logdet(precision) - np.sum(emp_cov * precision)
 
 
-def objective(emp_cov, K1, K2, A1, A2, R, alpha1, alpha2, tau, rho) : # TODO
+def objective(emp_cov, K1, K2, A1, A2, R, alpha1, alpha2, tau, rho):
     """Objective function for time-varying graphical lasso."""
-    obj = np.sum(-n * log_likelihood(emp_cov, precision)
-                 for emp_cov, precision, n in zip(S, K, n_samples))
-    obj += lamda * np.sum(map(l1_od_norm, K))
-    obj += beta * np.sum(map(psi, K[1:] - K[:-1]))
+    K = [A1, A2]
+    sample_sizes = [E.shape[0] for E in emp_cov]
+    obj = np.sum(-(1/n) * log_likelihood(E, precision)
+                 for E, precision, n in zip(emp_cov, K, sample_sizes))
+    obj += alpha1 * l1_od_norm(K1)
+    obj += alpha2 * l1_od_norm(K2)
+    obj += tau * l1_od_norm(R)
     return obj
 
 
 def _R_update(K1, K2, A1, A2, R, U1, U2, rho, tau, max_iter):
     gamma = 1e-7
-
+    invK1 = np.linalg.pinv(K1)
+    invK2 = np.linalg.pinv(K2)
+    KAU2 = K2 - A2 + U2
+    KAU1 = K1 - A1 + U1
     for iter_ in range(max_iter):
         R_old = R.copy()
-        invK1 = np.linalg.pinv(K1)
-        invK2 = np.linalg.pinv(K2)
         invK1R = invK1.dot(R)
         RinvK2 = R.dot(invK2)
 
-        gradient = -2*rho*(invK1R.dot(K2 - A2 - R.T.dot(invK1R) + U2) +
-                           (K1 - A1 - RinvK2.dot(R.T) + U1).dot(RinvK2))
-
+        gradient = -2*rho*(invK1R.dot(KAU2 - R.T.dot(invK1R)) +
+                           (KAU1 - RinvK2.dot(R.T)).dot(RinvK2))
+        if(np.any(np.isnan(gradient))):
+            print(KAU1)
+            print(KAU2)
+            print(KAU2 - R.T.dot(invK1R))
+            print(KAU1 - RinvK2.dot(R.T))
+            print(iter, R)
         R = R - gamma*gradient
         R = soft_thresholding_sign(R, tau*gamma)
-        if np.linalg.norm(R_old - R)/np.linalg.norm(R) < 1e-5:
+        #print(np.linalg.norm(R_old - R)/np.linalg.norm(R))
+        if np.linalg.norm(R_old - R)/np.linalg.norm(R) < 1e-4:
+            #print(R)
             break
     else:
         warnings.warn("The update of the matrix R did not converge.")
     return R
+
+
+def _K_update(K1, K2, A1, A2, R, U1, U2, rho, alpha1, alpha2, max_iter):
+    gamma = 1e-7
+    AU1 = U1 - A1
+    AU2 = U2 - A2
+
+    for iter_ in range(max_iter):
+        K1_old = K1.copy()
+        K2_old = K2.copy()
+
 
 
 def two_layers_graphical_lasso(
@@ -138,29 +162,28 @@ def two_layers_graphical_lasso(
         A2_old = A2.copy()
 
         # update K1
-        M = A1 + np.linalg.multi_dot((R, np.linalg.pinv(K2), R.T)) + U1
-        K1 = soft_thresholding_od(M, lamda=alpha1 / rho)
-        print(K1)
-        # update K2
-        M = A2 + np.linalg.multi_dot((R.T, np.linalg.pinv(K1), R)) + U2
-        K2 = soft_thresholding_od(M, lamda=alpha2 / rho)
-
+        # M = A1 + np.linalg.multi_dot((R, np.linalg.pinv(K2), R.T)) + U1
+        # K1 = soft_thresholding_od(M, lamda=alpha1 / rho)
+        # # update K2
+        # M = A2 + np.linalg.multi_dot((R.T, np.linalg.pinv(K1), R)) + U2
+        # K2 = soft_thresholding_od(M, lamda=alpha2 / rho)
+        K1, K2 = _K_update(K1, K2, A1, A2, R, U1, U2, rho, alpha1, alpha2,
+                           max_iter=500)
         # update A1
-        M = K1 - np.linalg.multi_dot((R, np.linalg.pinv(K2), R.T)) + U1
+        M = K1 - np.linalg.multi_dot((R, np.linalg.pinv(K2), R.T)) - U1
         M += M.T
         M /= 2.
-        A1 = prox_logdet(data_list[0] - rho * M, lamda=1. / (rho*n1))
-
+        A1 = prox_logdet(data_list[0] - (rho/n2) * M, lamda=n1 / rho)
         # update A2
-        M = K2 - np.linalg.multi_dot((R.T, np.linalg.pinv(K1), R)) + U2
+        M = K2 - np.linalg.multi_dot((R.T, np.linalg.pinv(K1), R)) - U2
         M += M.T
         M /= 2.
-        A2 = prox_logdet(data_list[1] - rho * M, lamda=1. / (rho*n2))
+        A2 = prox_logdet(data_list[1] - (rho/n2) * M, lamda=n2 / rho)
 
         # update R
         R = _R_update(K1, K2, A1, A2, R, U1, U2, rho, tau,
-                      max_iter=500)
-
+                      max_iter=1000)
+        #print(R)
         # update residuals
         RK2R = np.linalg.multi_dot((R, np.linalg.pinv(K2), R.T))
         RK1R = np.linalg.multi_dot((R.T, np.linalg.pinv(K1), R))
@@ -208,7 +231,7 @@ def two_layers_graphical_lasso(
     return return_list
 
 
-class TwoLayersGraphicalLasso(GraphLasso):
+class TwoLayersGraphicalLasso(GraphicalLasso):
     """Sparse inverse covariance estimation with an l1-penalized estimator.
 
     Parameters
@@ -484,8 +507,12 @@ class TwoLayersGraphicalLasso(GraphLasso):
 
         for i in len(X_test):
             if X_test[i].shape[1] != self.X_train[i].shape[1]:
-                sys.error("The number of features of the %d layer dataset given"
-                          "as test is not consistent with the train. Train: %d "
-                          "features; Test: %d features" %
+                sys.error("The number of features of the %d layer dataset "
+                          "given as test is not consistent with the train. "
+                          "Train: %d features; Test: %d features" %
                           (i+1, self.X_train[i].shape[1], X_test[i].shape[1]))
                 sys.exit(0)
+
+
+
+# class TwoLayersFixedLinks(GraphicalLasso):
