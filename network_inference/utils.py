@@ -33,3 +33,7 @@ def update_rho(rho, rnorm, snorm, iteration=None, mu=10, tau_inc=2, tau_dec=2):
     elif snorm > mu * rnorm:
         return rho / tau_dec
     return rho
+
+
+def _scalar_product(x, y):
+    return (x * y).sum()
