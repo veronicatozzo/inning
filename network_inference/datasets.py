@@ -11,6 +11,13 @@ def is_pos_def(x, tol=1e-15):
     return np.all(eigs > 0)
 
 
+def is_pos_semi_def(x, tol=1e-15):
+    """Check if x is positive definite."""
+    eigs = np.linalg.eigvalsh(x)
+    eigs[np.abs(eigs) < tol] = 0
+    return np.all(eigs >= 0)
+
+
 def generate_two_layers_network(
         d1, n1, d2, n2, sparsity1=0.7, sparsity2=0.7, sparsityinter=0.3,
         random_state=None):
