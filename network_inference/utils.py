@@ -9,6 +9,11 @@ convergence = namedtuple('convergence',
                          ('obj', 'rnorm', 'snorm', 'e_pri', 'e_dual'))
 
 
+def log_likelihood(emp_cov, precision):
+    """Gaussian log-likelihood without constant term."""
+    return fast_logdet(precision) - np.sum(emp_cov * precision)
+
+
 def l1_od_norm(precision):
     """L1 norm off-diagonal."""
     return np.abs(precision).sum() - np.abs(np.diag(precision)).sum()
@@ -37,3 +42,8 @@ def update_rho(rho, rnorm, snorm, iteration=None, mu=10, tau_inc=2, tau_dec=2):
 
 def _scalar_product(x, y):
     return (x * y).sum()
+
+
+def l1_od_norm(precision):
+    """L1 norm off-diagonal."""
+    return np.abs(precision).sum() - np.abs(np.diag(precision)).sum()

@@ -5,230 +5,22 @@ import numpy as np
 import warnings
 import sys
 
-# from functools import partial
-from sklearn.covariance import empirical_covariance
-from sklearn.covariance import GraphicalLasso
-from sklearn.utils.extmath import fast_logdet  # , squared_norm
+from scipy import linalg
+from functools import partial
+
+from sklearn.covariance import GraphicalLasso, empirical_covariance
+from sklearn.utils.extmath import fast_logdet , squared_norm
 from sklearn.utils.validation import check_array, check_random_state
-# from sklearn.utils.validation import check_symmetric
 
-from network_inference.utils import check_data_dimensions, convergence, \
+from .utils import check_data_dimensions, convergence, 
                                     update_rho, l1_od_norm
-from network_inference.prox import prox_logdet, soft_thresholding_od, \
+from .utils import _scalar_product, update_rho, convergence
+from .utils import log_likelihood
+from .prox import prox_logdet, soft_thresholding_od, \
                                     soft_thresholding_sign
-
-from network_inference.datasets import is_pos_def
-
-
-def log_likelihood(emp_cov, precision):
-    """Gaussian log-likelihood without constant term."""
-    return fast_logdet(precision) - np.sum(emp_cov * precision)
-
-
-def objective(emp_cov, K1, K2, A1, A2, R, alpha1, alpha2, tau, rho):
-    """Objective function for time-varying graphical lasso."""
-    K = [A1, A2]
-    sample_sizes = [E.shape[0] for E in emp_cov]
-    obj = np.sum(-(1/n) * log_likelihood(E, precision)
-                 for E, precision, n in zip(emp_cov, K, sample_sizes))
-    obj += alpha1 * l1_od_norm(K1)
-    obj += alpha2 * l1_od_norm(K2)
-    obj += tau * l1_od_norm(R)
-    return obj
-
-
-def _R_update(K1, K2, A1, A2, R, U1, U2, rho, tau, max_iter):
-    gamma = 1e-7
-    invK1 = np.linalg.pinv(K1)
-    invK2 = np.linalg.pinv(K2)
-    KAU2 = K2 - A2 + U2
-    KAU1 = K1 - A1 + U1
-    for iter_ in range(max_iter):
-        R_old = R.copy()
-        invK1R = invK1.dot(R)
-        RinvK2 = R.dot(invK2)
-
-        gradient = -2*rho*(invK1R.dot(KAU2 - R.T.dot(invK1R)) +
-                           (KAU1 - RinvK2.dot(R.T)).dot(RinvK2))
-        if(np.any(np.isnan(gradient))):
-            print(KAU1)
-            print(KAU2)
-            print(KAU2 - R.T.dot(invK1R))
-            print(KAU1 - RinvK2.dot(R.T))
-            print(iter, R)
-        R = R - gamma*gradient
-        R = soft_thresholding_sign(R, tau*gamma)
-        #print(np.linalg.norm(R_old - R)/np.linalg.norm(R))
-        if np.linalg.norm(R_old - R)/np.linalg.norm(R) < 1e-4:
-            #print(R)
-            break
-    else:
-        warnings.warn("The update of the matrix R did not converge.")
-    return R
-
-
-def _K_update(K1, K2, A1, A2, R, U1, U2, rho, alpha1, alpha2, max_iter):
-    gamma = 1e-7
-    AU1 = U1 - A1
-    AU2 = U2 - A2
-
-    for iter_ in range(max_iter):
-        K1_old = K1.copy()
-        K2_old = K2.copy()
-
-
-
-def two_layers_graphical_lasso(
-        data_list, alpha1=0.01, alpha2=0.01, tau=0.01, mode='admm', rho=1.,
-        tol=1e-3, rtol=1e-5, max_iter=100, verbose=False, return_n_iter=True,
-        return_history=False, compute_objective=False, compute_emp_cov=False,
-        random_state=None, n1=None, n2=None):
-    """Time-varying graphical lasso solver.
-
-    Solves the following problem via ADMM:
-        minimize  trace(S*X) - log det X + lambda*||X||_1
-
-    where S is the empirical covariance of the data
-    matrix D (training observations by features).
-
-    Parameters
-    ----------
-    data_list : list of 2-dimensional matrices.
-        Input matrices.
-    alpha1 : float, optional
-        Regularisation parameter.
-    alpha2 : float, optional
-        Augmented Lagrangian parameter.
-    tau : float, optional
-        Augmented Lagrangian parameter.
-    mode: string, optional
-        Method for the minimization of the problem.
-    rho: float, optional
-        Over-relaxation parameter (typically between 1.0 and 1.8)
-    tol : float, optional
-        Absolute tolerance for convergence.
-    rtol : float, optional
-        Relative tolerance for convergence.
-    max_iter : int, optional
-        Maximum number of iterations.
-    verbose: bool, optional
-        Print info of the status.
-    return_n_iter: bool, optional
-        If True the number of iterations is returned.
-    return_history : bool, optional
-        Return the history of computed values.
-    compute_objective: bool, optional
-        Compute the objective at each iteration.
-    compute_emp_cov: bool, optional
-        Compute the empirical covariance of the input data.
-
-    Returns
-    -------
-    precision1: numpy.array, 2-dimensional
-        Network of the first layer.
-    precision2: numpy.array, 2-dimensional
-        Network of the second layer.
-    relations: numpy.array, 2_dimensional
-        The links between the two layers.
-    empirical_covariance: list of 2-dimensional numpy.array
-        The computed empirical covariance of the input data.
-    n_iter: int
-        Number of total iterations.
-    history : list
-        If return_history, then also a structure that contains the
-        objective value, the primal and dual residual norms, and tolerances
-        for the primal and dual residual norms at each iteration.
-    """
-
-    random_state = check_random_state(random_state)
-    if compute_emp_cov:
-        n1, n2 = [data_list[i].shape[0] for i in range(len(data_list))]
-        emp_cov = [empirical_covariance(
-            x, assume_centered=False) for x in data_list]
-    else:
-        emp_cov = data_list
-
-    A1 = emp_cov[0].copy()
-    A2 = emp_cov[1].copy()
-    K1 = np.zeros_like(emp_cov[0])
-    K2 = np.zeros_like(emp_cov[1])
-    R = random_state.rand(K1.shape[0], K2.shape[0])
-    U1 = K1.copy()
-    U2 = K2.copy()
-
-    checks = []
-    for iteration_ in range(max_iter):
-        A1_old = A1.copy()
-        A2_old = A2.copy()
-
-        # update K1
-        # M = A1 + np.linalg.multi_dot((R, np.linalg.pinv(K2), R.T)) + U1
-        # K1 = soft_thresholding_od(M, lamda=alpha1 / rho)
-        # # update K2
-        # M = A2 + np.linalg.multi_dot((R.T, np.linalg.pinv(K1), R)) + U2
-        # K2 = soft_thresholding_od(M, lamda=alpha2 / rho)
-        K1, K2 = _K_update(K1, K2, A1, A2, R, U1, U2, rho, alpha1, alpha2,
-                           max_iter=500)
-        # update A1
-        M = K1 - np.linalg.multi_dot((R, np.linalg.pinv(K2), R.T)) - U1
-        M += M.T
-        M /= 2.
-        A1 = prox_logdet(data_list[0] - (rho/n2) * M, lamda=n1 / rho)
-        # update A2
-        M = K2 - np.linalg.multi_dot((R.T, np.linalg.pinv(K1), R)) - U2
-        M += M.T
-        M /= 2.
-        A2 = prox_logdet(data_list[1] - (rho/n2) * M, lamda=n2 / rho)
-
-        # update R
-        R = _R_update(K1, K2, A1, A2, R, U1, U2, rho, tau,
-                      max_iter=1000)
-        #print(R)
-        # update residuals
-        RK2R = np.linalg.multi_dot((R, np.linalg.pinv(K2), R.T))
-        RK1R = np.linalg.multi_dot((R.T, np.linalg.pinv(K1), R))
-        U1 += A1 - K1 + RK2R
-        U2 += A2 - K2 + RK1R
-
-        # diagnostics, reporting, termination checks
-        obj = objective(emp_cov, K1, K2, A1, A2, R, alpha1, alpha1, tau, rho) \
-            if compute_objective else np.nan
-        rnorm = np.sqrt(np.linalg.norm(A1 - K1 + RK2R)**2 +
-                        np.linalg.norm(A2 - K2 + RK1R)**2)
-        snorm = rho * np.sqrt(np.linalg.norm(A1 - A1_old)**2 +
-                              np.linalg.norm(A2 - A2_old)**2)
-        check = convergence(
-            obj=obj, rnorm=rnorm, snorm=snorm,
-            e_pri=(np.sqrt(A1.size + A2.size) * tol + rtol *
-                   max(np.sqrt(np.linalg.norm(A1)**2 + np.linalg.norm(A2)**2 +
-                               np.linalg.norm(U1)**2 + np.linalg.norm(U2)**2),
-                       np.sqrt(np.linalg.norm(K1 - RK2R)**2 +
-                               np.linalg.norm(K2 - RK1R)**2))),
-            e_dual=(np.sqrt(A1.size + A2.size) * tol + rtol * rho *
-                    np.sqrt(np.linalg.norm(U1)**2 + np.linalg.norm(U2)**2))
-        )
-
-        if verbose:
-            print("obj: %.4f, rnorm: %.4f, snorm: %.4f,"
-                  "eps_pri: %.4f, eps_dual: %.4f" % check)
-
-        checks.append(check)
-        if check.rnorm <= check.e_pri and check.snorm <= check.e_dual:
-            break
-        rho_new = update_rho(rho, rnorm, snorm, iteration=iteration_)
-        # scaled dual variables should be also rescaled
-        U1 *= rho / rho_new
-        U2 *= rho / rho_new
-        rho = rho_new
-    else:
-        warnings.warn("Objective did not converge.")
-
-    return_list = [K1, K2, R, K1 - RK2R, K2 - RK1R, emp_cov]
-    if return_n_iter:
-        return_list.append(iteration_)
-    if return_history:
-        return_list.append(checks)
-    return return_list
+from .datasets import is_pos_def, is_pos_semi_def
+from ._two_layers_optimization import two_layers_fixed_links_GL, \
+                                      two_layers_graphical_lasso
 
 
 class TwoLayersGraphicalLasso(GraphicalLasso):
@@ -312,7 +104,7 @@ class TwoLayersGraphicalLasso(GraphicalLasso):
                  tol=1e-4, rtol=1e-4, max_iter=100,
                  verbose=False, assume_centered=False, compute_objective=False,
                  random_state=None):
-        super(GraphLasso, self).__init__(
+        super(GraphicalLasso, self).__init__(
             tol=tol, max_iter=max_iter, verbose=verbose,
             assume_centered=assume_centered, mode=mode)
         self.alpha1 = alpha1
@@ -514,5 +306,168 @@ class TwoLayersGraphicalLasso(GraphicalLasso):
                 sys.exit(0)
 
 
+class TwoLayersFixedLinks(GraphicalLasso):
+    """Sparse inverse covariance estimation with an l1-penalized estimator.
 
-# class TwoLayersFixedLinks(GraphicalLasso):
+    Parameters
+    ----------
+    L : array-like, shape (n_latent, n_features)
+        The links between the observed layer and the hidden one.
+
+    eta : positive float, default 0.01
+            Regularization parameter for precision matrix.
+            The higher eta, the more regularization, the sparser the inverse
+            covariance.
+
+    mu : positive float, default 0.01
+        Regularization parameter for hidden precision matrix.
+        The higher mu, the more regularization, the sparser the inverse
+        covariance.
+
+    tol : positive float, default 1e-4
+        Absolute tolerance to declare convergence.
+
+    rtol : positive float, default 1e-4
+        Relative tolerance to declare convergence.
+
+    max_iter : integer, default 100
+        The maximum number of iterations.
+
+    verbose : boolean, default False
+        If verbose is True, the objective function, rnorm and snorm are
+        printed at each iteration.
+
+    assume_centered : boolean, default False
+        If True, data are not centered before computation.
+        Useful when working with data whose mean is almost, but not exactly
+        zero.
+        If False, data are centered before computation.
+
+    compute_objective : boolean, default True
+        Choose if compute the objective function during iterations
+        (only useful if `verbose=True`).
+
+    mode : {'fbs'}, default 'fbs'
+        Minimisation algorithm. At the moment, only 'fbs' is available,
+        so this is ignored.
+
+    Attributes
+    ----------
+    covariance_ : array-like, shape (n_features, n_features)
+        Estimated covariance matrix of the first layer.
+
+    precision_ : array-like, shape (n_features, n_features)
+        Estimated precision matrix of the first layer.
+
+    hidden_ : array-like, shape (n_latent, n_latent)
+        Estimated pseudo inverse matrix of the first layer.
+
+    observed_: array-like, shape (n_features, n_features)
+        The estimated observed precision matrix.
+
+    n_iter_ : int
+        Number of iterations run.
+
+    """
+
+    def __init__(self, K, eta=0.01, mu=0.01, tau=0.01, rho=1.,
+                 tol=1e-4, rtol=1e-4, max_iter=100,
+                 verbose=False, assume_centered=False, compute_objective=False,
+                 random_state=None):
+        super(GraphLasso, self).__init__(
+            tol=tol, max_iter=max_iter, verbose=verbose,
+            assume_centered=assume_centered, mode=mode)
+        self.eta = eta
+        self.mu = mu
+        self.rho = rho
+        self.rtol = rtol
+        self.compute_objective = compute_objective
+        self.random_state = random_state
+        self.covariance_ = None
+        self.precision_ = None
+        self.hidden_ = None
+        self.observed_ = None
+        self.emp_cov = None
+        self.n_iter_ = None
+
+    def get_precision(self):
+        """Getter for the observed global precision matrix.
+
+        Returns
+        -------
+        precision_ : array-like,
+            The precision matrix associated to the current covariance object.
+
+        """
+        return self.observed_
+
+
+    def fit(self, X, y=None):
+        """Fit the GraphLasso model to X.
+
+        Parameters
+        ----------
+        X : array-like shape (n_samples, n_features) 
+            Data from which to compute the covariance estimate.
+        y : (ignored)
+        """
+        self.random_state = check_random_state(self.random_state)
+        check_data_dimensions(X, layers=2)
+        X = [check_array(x, ensure_min_features=2,
+                         ensure_min_samples=2, estimator=self) for x in X]
+
+        self.X_train = X
+        if self.assume_centered:
+            self.location_ = np.zeros((X.shape[0],  X.shape[1]))
+        else:
+            self.location_ = X.mean(1).reshape(X.shape[0], 
+                                               X.shape[1])
+
+        emp_cov = [empirical_covariance(
+            x, assume_centered=self.assume_centered) for x in X]
+        self.precision_,  self.hidden_, \
+        self.observed_,  self.emp_cov, \
+        self.n_iter_ = two_layers_fixed_links_GL(
+                        emp_cov, L, eta=self.eta, mu=self.mu,
+                        rho=self.rho, tol=self.tol, rtol=self.rtol,
+                        max_iter=self.max_iter, verbose=self.verbose,
+                        return_n_iter=True, return_history=False,
+                        compute_objective=self.compute_objective)
+        return self
+
+    def score(self, X_test, y=None):
+        """Computes the log-likelihood of a Gaussian data set with
+        `self.covariance_` as an estimator of its covariance matrix.
+
+        Parameters
+        ----------
+        X_test : lenght-2 list of array-like of shape (n_samples1, n_features1)
+                 and (n_samples2, n_features2)
+            Test data of which we compute the likelihood, where n_samples is
+            the number of samples and n_features is the number of features.
+            X_test is assumed to be drawn from the same distribution than
+            the data used in fit (including centering). The number of features
+            must correspond.
+
+        y : not used, present for API consistence purpose.
+
+        Returns
+        -------
+        res : float
+            The likelihood of the data set with `self.covariance1_` and
+            `self.covariance1_`as an estimator of its covariance matrix.
+
+        """
+
+        if self.covariance_ is None :
+            sys.error("The estimator is not fit on training data.")
+            sys.exit(0)
+
+        check_data_dimensions(X_test, layers=2)
+        # compute empirical covariance of the test set
+        test_cov = empirical_covariance(x - self.location_, assumed_centered=True)
+
+        res = log_likelihood(test_cov, self.get_precision())
+        return res
+
+   
