@@ -288,7 +288,7 @@ def _choose_gamma(gamma, H, R, T, K, U, _rho, _mu, _lambda, grad,
         print("not found gamma")
     return gamma, prox
 
-    def _upgrade_H(H, R, T, K, U, _rho, _mu, verbose=0, random_state=None):
+def _upgrade_H(H, R, T, K, U, _rho, _mu, verbose=0, random_state=None):
     # H = make_sparse_spd_matrix(dim=K.shape[0], alpha=0.5, random_state=random_state)
     _lambda = 1
     gamma = 1
@@ -325,7 +325,7 @@ def objectiveFLGL(emp_cov, K, R, T, H, mu, eta, rho):
     return res
     
 
-def two_layers_fixed_links_GL(X, L, mu=0.01, eta=0.01, rho=1., 
+def two_layers_fixed_links_GL(X, K, mu=0.01, eta=0.01, rho=1., 
         tol=1e-3, rtol=1e-5, max_iter=100, verbose=False, return_n_iter=True,
         return_history=False, compute_objective=False, compute_emp_cov=False,
         random_state=None):
@@ -343,8 +343,8 @@ def two_layers_fixed_links_GL(X, L, mu=0.01, eta=0.01, rho=1.,
     else:
         emp_cov = X
 
-    # H = make_sparse_spd_matrix(K.shape[0], alpha=0.5)
-    H = np.eye(K.shape[0])
+    H = make_sparse_spd_matrix(K.shape[0], alpha=0.5, random_state=random_state)
+    #H = np.eye(K.shape[0])
     T = emp_cov.copy()
     T = (T + T.T) / 2.
     R = T - np.linalg.multi_dot((K.T, linalg.pinvh(H), K))
@@ -376,7 +376,7 @@ def two_layers_fixed_links_GL(X, L, mu=0.01, eta=0.01, rho=1.,
         U += R - T + KHK
 
         # diagnostics, reporting, termination checks 
-        obj = objectiveFLGL(emp_cov, K, R, T, H, mu, eta, rho) \
+        obj = objectiveFLGL(emp_cov, K, R, T, H,U, mu, eta, rho) \
             if compute_objective else np.nan
         rnorm = np.linalg.norm(R - T + KHK)
         snorm = rho * np.linalg.norm(R - R_old)
