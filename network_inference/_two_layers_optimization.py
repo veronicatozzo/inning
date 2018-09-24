@@ -76,7 +76,7 @@ def two_layers_graphical_lasso(
         data_list, alpha1=0.01, alpha2=0.01, tau=0.01, mode='admm', rho=1.,
         tol=1e-3, rtol=1e-5, max_iter=100, verbose=False, return_n_iter=True,
         return_history=False, compute_objective=False, compute_emp_cov=False,
-        random_state=None, n1=None, n2=None):
+        random_state=None, update_rho=False:
     """Time-varying graphical lasso solver.
 
     Solves the following problem via ADMM:
@@ -115,6 +115,9 @@ def two_layers_graphical_lasso(
         Compute the objective at each iteration.
     compute_emp_cov: bool, optional
         Compute the empirical covariance of the input data.
+    update_rho: bool, optional
+        If True the value of the parameter rho is updated.
+        Default False.
 
     Returns
     -------
@@ -209,11 +212,12 @@ def two_layers_graphical_lasso(
         checks.append(check)
         if check.rnorm <= check.e_pri and check.snorm <= check.e_dual:
             break
-        rho_new = update_rho(rho, rnorm, snorm, iteration=iteration_)
-        # scaled dual variables should be also rescaled
-        U1 *= rho / rho_new
-        U2 *= rho / rho_new
-        rho = rho_new
+        if update_rho:
+            rho_new = update_rho(rho, rnorm, snorm, iteration=iteration_)
+            # scaled dual variables should be also rescaled
+            U1 *= rho / rho_new
+            U2 *= rho / rho_new
+            rho = rho_new
     else:
         warnings.warn("Objective did not converge.")
 
@@ -312,7 +316,8 @@ def _choose_gamma(gamma, H, R, T, K, U, _rho, _mu, _lambda, grad,
         print("Did not converge")
     return H
 
-    def objectiveFLGL(emp_cov, K, R, T, H, mu, eta, rho):
+
+def objectiveFLGL(emp_cov, K, R, T, H, mu, eta, rho):
     res = - fast_logdet(R) + np.sum(R * emp_cov)
     res += rho / 2. * squared_norm(R - T + U + np.linalg.multi_dot((K.T, linalg.pinvh(H), K)))
     res += mu * l1_od_norm(H)
