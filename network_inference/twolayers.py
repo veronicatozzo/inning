@@ -12,7 +12,7 @@ from sklearn.covariance import GraphicalLasso, empirical_covariance
 from sklearn.utils.extmath import fast_logdet , squared_norm
 from sklearn.utils.validation import check_array, check_random_state
 
-from .utils import check_data_dimensions, convergence, 
+from .utils import check_data_dimensions, convergence,\
                                     update_rho, l1_od_norm
 from .utils import _scalar_product, update_rho, convergence
 from .utils import log_likelihood
@@ -370,16 +370,18 @@ class TwoLayersFixedLinks(GraphicalLasso):
 
     """
 
-    def __init__(self, K, eta=0.01, mu=0.01, tau=0.01, rho=1.,
+    def __init__(self, L, eta=0.01, mu=0.01, tau=0.01, rho=1.,
                  tol=1e-4, rtol=1e-4, max_iter=100,
                  verbose=False, assume_centered=False, compute_objective=False,
                  random_state=None):
-        super(GraphLasso, self).__init__(
-            tol=tol, max_iter=max_iter, verbose=verbose,
-            assume_centered=assume_centered, mode=mode)
+        self.L = L
+        self.max_iter = max_iter
+        self.verbose = verbose
+        self.assume_centered = assume_centered
         self.eta = eta
         self.mu = mu
         self.rho = rho
+        self.tol = tol
         self.rtol = rtol
         self.compute_objective = compute_objective
         self.random_state = random_state
@@ -396,6 +398,7 @@ class TwoLayersFixedLinks(GraphicalLasso):
         Returns
         -------
         precision_ : array-like,
+
             The precision matrix associated to the current covariance object.
 
         """
@@ -412,23 +415,22 @@ class TwoLayersFixedLinks(GraphicalLasso):
         y : (ignored)
         """
         self.random_state = check_random_state(self.random_state)
-        check_data_dimensions(X, layers=2)
-        X = [check_array(x, ensure_min_features=2,
-                         ensure_min_samples=2, estimator=self) for x in X]
+       # check_data_dimensions(X, layers=2)
+        X = check_array(X, ensure_min_features=2,
+                         ensure_min_samples=2, estimator=self)
 
         self.X_train = X
         if self.assume_centered:
             self.location_ = np.zeros((X.shape[0],  X.shape[1]))
         else:
-            self.location_ = X.mean(1).reshape(X.shape[0], 
-                                               X.shape[1])
+            self.location_ = X.mean(0)
 
-        emp_cov = [empirical_covariance(
-            x, assume_centered=self.assume_centered) for x in X]
+        emp_cov = empirical_covariance(
+            		X, assume_centered=self.assume_centered)
         self.precision_,  self.hidden_, \
         self.observed_,  self.emp_cov, \
         self.n_iter_ = two_layers_fixed_links_GL(
-                        emp_cov, L, eta=self.eta, mu=self.mu,
+                        emp_cov, self.L, eta=self.eta, mu=self.mu,
                         rho=self.rho, tol=self.tol, rtol=self.rtol,
                         max_iter=self.max_iter, verbose=self.verbose,
                         return_n_iter=True, return_history=False,

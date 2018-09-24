@@ -1,4 +1,5 @@
 import sys
+import warnings 
 
 import numpy as np
 
@@ -21,7 +22,7 @@ def l1_od_norm(precision):
 
 def check_data_dimensions(X, layers=2):
     if len(X) != layers:
-        sys.error("The maximum number of layers is %d, X must be a list of"
+        warnings.warn("The maximum number of layers is %d, X must be a list of"
                   " length %d of data matrices." % (layers, layers))
         sys.exit(0)
 
