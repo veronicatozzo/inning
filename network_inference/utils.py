@@ -16,6 +16,25 @@ def log_likelihood(emp_cov, precision):
     return fast_logdet(precision) - np.sum(emp_cov * precision)
 
 
+def BIC(emp_cov, precision):
+    return log_likelihood(emp_cov, precision) - (np.sum(precision != 0)-precision.shape[0])
+
+
+def EBIC(emp_cov, precision, n=100, epsilon=0.5):
+    likelihood = log_likelihood(emp_cov, precision)
+    of_nonzero = np.sum(precision != 0) - precision.shape[0]
+    penalty = np.log(n)/n*of_nonzero + 4*epsilon* np.log(precision.shape[0])/n * of_nonzero
+    return likelihood - penalty
+
+
+def EBIC_m(emp_cov, precision, n=100, epsilon=0.5):
+    likelihood = log_likelihood(emp_cov, precision)
+    of_nonzero = np.sum(precision != 0) - precision.shape[0]
+    p = precision.shape[0]
+    penalty = np.log(n)/n*of_nonzero + 4*epsilon* np.log(p(p-1)/2)/n * of_nonzero
+    return likelihood - penalty
+
+
 def l1_od_norm(precision):
     """L1 norm off-diagonal."""
     return np.abs(precision).sum() - np.abs(np.diag(precision)).sum()

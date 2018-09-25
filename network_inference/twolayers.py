@@ -3,19 +3,26 @@ from __future__ import division
 
 import numpy as np
 import warnings
+import operator
 import sys
 
 from scipy import linalg
 from functools import partial
+from itertools import product
+from collections import Sequence
 
 from sklearn.covariance import GraphicalLasso, empirical_covariance
 from sklearn.utils.extmath import fast_logdet , squared_norm
 from sklearn.utils.validation import check_array, check_random_state
+from sklearn.utils import Parallel, delayed
+from sklearn.exceptions import ConvergenceWarning
+from sklearn.model_selection import check_cv
+from sklearn.datasets import make_sparse_spd_matrix
 
 from .utils import check_data_dimensions, convergence,\
                                     update_rho, l1_od_norm
 from .utils import _scalar_product, update_rho, convergence
-from .utils import log_likelihood
+from .utils import log_likelihood, BIC, EBIC, EBIC_m
 from .prox import prox_logdet, soft_thresholding_od, \
                                     soft_thresholding_sign
 from .datasets import is_pos_def, is_pos_semi_def
@@ -473,3 +480,194 @@ class TwoLayersFixedLinks(GraphicalLasso):
         return res
 
    
+def par_max(emp_cov):
+    A = np.copy(emp_cov)
+    A.flat[::A.shape[0] + 1] = 0
+    return np.max(np.abs(A))
+
+
+def flgl_path(X_train, links=None, etas=[0.1], mus=[0.1],
+              X_test=None, tol=1e-3, max_iter=200,
+              update_rho=False, verbose=0, score='ebic',
+              random_state=None):
+    
+    score_func = {'likelihood': log_likelihood,
+                  'bic': BIC,
+                  'ebic': partial(EBIC, n=X_test.shape[0]),
+                  'ebicm': partial(EBIC_m, n=X_test.shape[0])}
+    try:
+        score_func = score_func[score]
+    except KeyError:
+        warnings.warn("The score type passed is not available, using log likelihood.")
+        score_func = log_likelihood
+    
+    
+    emp_cov = empirical_covariance(X_train)
+    covariance_ = emp_cov.copy()
+   
+    covariances_ = list()
+    precisions_ = list()
+    hiddens_ =  list()
+    scores_ = list()
+    
+    if X_test is not None:
+        test_emp_cov = empirical_covariance(X_test)
+
+    for eta in etas:
+        for mu in mus:
+            try:
+                # Capture the errors, and move on
+                cov_, prec_, hid_,_ = two_layers_fixed_links_GL(
+                    emp_cov, links, mu, eta, max_iter=max_iter, 
+                    random_state=random_state, return_n_iter=False)
+                covariances_.append(cov_)
+                precisions_.append(prec_)
+                hiddens_.append(hid_)
+                
+                if X_test is not None:
+                    this_score = score_func(test_emp_cov, prec_)
+            except FloatingPointError:
+                this_score = -np.inf
+                covariances_.append(np.nan)
+                precisions_.append(np.nan)
+            if X_test is not None:
+                if not np.isfinite(this_score):
+                    this_score = -np.inf
+                scores_.append(this_score)
+            if verbose:
+                if X_test is not None:
+                    print('[graphical_lasso_path] eta: %.2e, mu: %.2e, score: %.2e'
+                          % (eta, mu, this_score))
+                else:
+                    print('[graphical_lasso_path] eta: %.2e, mu: %.2e' % (eta, mu))
+    if X_test is not None:
+        return covariances_, precisions_, hiddens_, scores_
+    return covariances_, precisions_, hiddens_
+
+
+class TwoLayersFixedLinksCV():
+    def __init__(self, links, etas=4, mus=4, rho=1., cv=None, tol=1e-4,
+                 max_iter=100, n_jobs=1,
+                 verbose=False, assume_centered=False,
+                 update_rho=False, random_state=None):
+        self.links = links
+        self.etas = etas
+        self.mus = mus
+        self.rho = 1.
+        self.cv = cv
+        self.n_jobs = n_jobs
+        self.tol = tol
+        self.max_iter = max_iter
+        self.verbose = verbose
+        self.update_rho = update_rho
+        self.assume_centered = assume_centered
+        self.random_state = random_state
+
+    def grid_scores(self):
+        return self.grid_scores_
+
+    def fit(self, X, y=None):
+        """Fits the GraphLasso covariance model to X.
+        Parameters
+        ----------
+        X : ndarray, shape (n_samples, n_features)
+            Data from which to compute the covariance estimate
+        y : (ignored)
+        """
+        # Covariance does not make sense for a single feature
+        self.random_state = check_random_state(self.random_state)
+        # check_data_dimensions(X, layers=2)
+        X = check_array(X, ensure_min_features=2,
+                         ensure_min_samples=2, estimator=self)
+
+        self.X_train = X
+        if self.assume_centered:
+            self.location_ = np.zeros((X.shape[0],  X.shape[1]))
+        else:
+            self.location_ = X.mean(0)
+
+        emp_cov = empirical_covariance(
+                        X, assume_centered=self.assume_centered)
+       
+        X = check_array(X, ensure_min_features=2, estimator=self)
+        cv = check_cv(self.cv, y, classifier=False)
+
+        # List of (alpha, scores, covs)
+        path = list()
+        n_etas = self.etas
+        inner_verbose = max(0, self.verbose - 1)
+
+        if isinstance(n_etas, Sequence):
+            etas = self.etas
+        else:
+            eta_1 = par_max(emp_cov)
+            eta_0 = 1e-2 * eta_1
+            etas = np.logspace(np.log10(eta_0), np.log10(eta_1),
+                                 n_etas)[::-1]
+        
+        n_mus = self.mus
+        inner_verbose = max(0, self.verbose - 1)
+
+        if isinstance(n_mus, Sequence):
+            mus = self.mus
+        else:
+            mu_1 = par_max(emp_cov) # not sure is the best strategy
+            mu_0 = 1e-2 * mu_1
+            mus = np.logspace(np.log10(mu_0), np.log10(mu_1),
+                                 n_mus)[::-1]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', ConvergenceWarning)
+
+        this_path = Parallel(
+                n_jobs=self.n_jobs,
+                verbose=self.verbose
+            )(delayed(flgl_path)(X[train], links=self.links, etas=etas, mus= mus,
+                                 X_test=X[test], tol=self.tol,
+                                        max_iter=int(.1 * self.max_iter),
+                                        update_rho=self.update_rho,
+                                        verbose=0, random_state=self.random_state)
+              for train, test in cv.split(X, y))
+
+        # Little danse to transform the list in what we need
+        covs, precs, hidds, scores = zip(*this_path)
+        covs = zip(*covs)
+        precs = zip(*precs)
+        hidds = zip(*hidds)
+        scores = zip(*scores)
+        combinations = list(product(etas, mus))
+        path.extend(zip(combinations, scores, covs))
+        path = sorted(path, key=operator.itemgetter(0), reverse=True)
+
+        # Find the maximum (avoid using built in 'max' function to
+        # have a fully-reproducible selection of the smallest alpha
+        # in case of equality)
+        best_score = -np.inf
+        last_finite_idx = 0
+        for index, (combination, scores, _) in enumerate(path):
+            this_score = np.mean(scores)
+            if this_score >= .1 / np.finfo(np.float64).eps:
+                this_score = np.nan
+            if np.isfinite(this_score):
+                last_finite_idx = index
+            if this_score >= best_score:
+                best_score = this_score
+                best_index = index
+
+            
+        path = list(zip(*path))
+        grid_scores = list(path[1])
+        parameters = list(path[0])
+        # Finally, compute the score with alpha = 0
+        best_eta, best_mu = combinations[best_index]
+        self.eta_ = best_eta
+        self.mu_ = best_mu
+        self.cv_parameters_ = combinations
+
+        # Finally fit the model with the selected alpha
+        self.covariance_, self.precision_, self.hidden_, self.R_, self.n_iter_ = two_layers_fixed_links_GL(
+            emp_cov, self.links, eta=best_eta, mu=best_mu, tol=self.tol,
+            max_iter=self.max_iter,
+            verbose=self.verbose, random_state=self.random_state, 
+            compute_objective=True, return_n_iter=True)
+        return self
