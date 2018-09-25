@@ -1,5 +1,6 @@
 import sys
 import warnings 
+from sklearn.utils.extmath import fast_logdet
 
 import numpy as np
 

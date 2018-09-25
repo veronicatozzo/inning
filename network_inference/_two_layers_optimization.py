@@ -10,6 +10,7 @@ from functools import partial
 from sklearn.covariance import GraphicalLasso, empirical_covariance
 from sklearn.utils.extmath import fast_logdet , squared_norm
 from sklearn.utils.validation import check_array, check_random_state
+from sklearn.datasets import make_sparse_spd_matrix
 
 from network_inference.utils import check_data_dimensions, convergence, \
                                     update_rho, l1_od_norm
@@ -76,7 +77,7 @@ def two_layers_graphical_lasso(
         data_list, alpha1=0.01, alpha2=0.01, tau=0.01, mode='admm', rho=1.,
         tol=1e-3, rtol=1e-5, max_iter=100, verbose=False, return_n_iter=True,
         return_history=False, compute_objective=False, compute_emp_cov=False,
-        random_state=None, update_rho=False:
+        random_state=None, update_rho=False):
     """Time-varying graphical lasso solver.
 
     Solves the following problem via ADMM:
@@ -265,7 +266,7 @@ def _choose_lambda(lamda, R, T, K, H, U,  _rho, _mu, prox, grad, gamma, delta=1e
               break
         lamda *= eps
     else:
-        return False, i+1
+        warnings.warn("Did not find lambda")
     return lamda, i + 1
 
 def _choose_gamma(gamma, H, R, T, K, U, _rho, _mu, _lambda, grad,
@@ -285,7 +286,7 @@ def _choose_gamma(gamma, H, R, T, K, U, _rho, _mu, _lambda, grad,
             break
         gamma *= eps
     else:
-        print("not found gamma")
+        warnings.warn("Did not find gamma")
     return gamma, prox
 
 def _upgrade_H(H, R, T, K, U, _rho, _mu, verbose=0, random_state=None):
@@ -313,11 +314,11 @@ def _upgrade_H(H, R, T, K, U, _rho, _mu, verbose=0, random_state=None):
         if(obj_diff<1e-4): 
             break
     else:
-        print("Did not converge")
+        warnings.warn("Algorithm for H minimization did not converge")
     return H
 
 
-def objectiveFLGL(emp_cov, K, R, T, H, mu, eta, rho):
+def objectiveFLGL(emp_cov, K, R, T, H, U, mu, eta, rho):
     res = - fast_logdet(R) + np.sum(R * emp_cov)
     res += rho / 2. * squared_norm(R - T + U + np.linalg.multi_dot((K.T, linalg.pinvh(H), K)))
     res += mu * l1_od_norm(H)
@@ -328,7 +329,7 @@ def objectiveFLGL(emp_cov, K, R, T, H, mu, eta, rho):
 def two_layers_fixed_links_GL(X, K, mu=0.01, eta=0.01, rho=1., 
         tol=1e-3, rtol=1e-5, max_iter=100, verbose=False, return_n_iter=True,
         return_history=False, compute_objective=False, compute_emp_cov=False,
-        random_state=None):
+        random_state=None, update_rho=False):
     """
     Params
     ------
@@ -396,14 +397,15 @@ def two_layers_fixed_links_GL(X, K, mu=0.01, eta=0.01, rho=1.,
         checks.append(check)
         if check.rnorm <= check.e_pri and check.snorm <= check.e_dual:
             break
-        rho_new = update_rho(rho, rnorm, snorm, iteration=iteration_)
-        # scaled dual variables should be also rescaled
-        U *= rho / rho_new
-        rho = rho_new
+        if update_rho:
+            rho_new = update_rho(rho, rnorm, snorm, iteration=iteration_)
+            # scaled dual variables should be also rescaled
+            U *= rho / rho_new
+            rho = rho_new
     else:
         warnings.warn("Objective did not converge.")
 
-    return_list = [T, H, R, emp_cov]
+    return_list = [linalg.pinvh(T), T, H, R]
     if return_n_iter:
         return_list.append(iteration_)
     if return_history:
