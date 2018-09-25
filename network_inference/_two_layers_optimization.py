@@ -403,7 +403,7 @@ def two_layers_fixed_links_GL(X, K, mu=0.01, eta=0.01, rho=1.,
     else:
         warnings.warn("Objective did not converge.")
 
-    return_list = [T, H, R, emp_cov]
+    return_list = [linalg.pinvh(T), T, H, R]
     if return_n_iter:
         return_list.append(iteration_)
     if return_history:
