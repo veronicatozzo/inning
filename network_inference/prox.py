@@ -1,6 +1,13 @@
 import numpy as np
 
 
+def prox_positive_semidefinite(a, lamda):
+    """Time-varying latent variable graphical lasso prox."""
+    es, Q = np.linalg.eigh(a)
+    xi = np.maximum(es, 0)
+    return np.linalg.multi_dot((Q, np.diag(xi), Q.T))
+
+
 def prox_logdet(a, lamda):
     """Time-varying latent variable graphical lasso prox."""
     es, Q = np.linalg.eigh(a)
@@ -25,3 +32,10 @@ def soft_thresholding_od(a, lamda):
     soft = np.sign(a) * np.maximum(np.abs(a) - lamda, 0)
     soft.flat[::a.shape[1] + 1] = np.diag(a)
     return soft
+
+
+def prox_trace_indicator(a, lamda):
+    """Time-varying latent variable graphical lasso prox."""
+    es, Q = np.linalg.eigh(a)
+    xi = np.maximum(es - lamda, 0)
+    return np.linalg.multi_dot((Q, np.diag(xi), Q.T))
