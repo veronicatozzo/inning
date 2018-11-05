@@ -1,8 +1,49 @@
 import numpy as np
 
+from itertools import product
 from sklearn.datasets import make_sparse_spd_matrix
 from sklearn.utils import check_random_state
 
+
+def generate_latent_network(n_obs=100, n_lat=10, n_samples=500,
+                            sparsity_obs=0.3, sparsity_lat=0.7,
+                            sparsityinter=0.3, random_state=None):
+
+#     random_state = check_random_state(random_state)
+#     glob =  np.zeros((n_obs+n_lat, n_obs+n_lat))
+#     glob[n_lat:, n_lat:] = make_sparse_spd_matrix(dim=n_obs, alpha=1-sparsity_obs,
+#                                    random_state=random_state)
+#     glob[:n_lat, :n_lat] = make_sparse_spd_matrix(dim=n_lat, alpha=1-sparsity_lat,
+#                                    random_state=random_state)
+#     inter = np.zeros((n_obs, n_lat))
+#     prod = np.array(list(product(np.arange(0, n_obs), np.arange(0, n_lat))))
+#     np.random.shuffle(prod)
+#     length = int(prod.shape[0]*(1-sparsityinter))
+#     indices_r = [p[0] for p in prod[:length]]
+#     indices_c = [p[1] for p in prod[:length]]
+#     inter[indices_r, indices_c] = random_state.randn(length)
+#     inter /= 1e-6
+#     glob[n_lat:, :n_lat] = inter
+#     glob[:n_lat, n_lat:] = inter.T
+#     #sum_ = np.sum(glob[:n_lat, :n_lat], axis=0) + np.sum(inter, axis=0)
+#     #glob[:n_lat, :n_lat] += np.diag(sum_)
+
+#     T_obs = glob[n_lat:, n_lat:] - \
+#             inter.dot(np.linalg.inv(glob[:n_lat, :n_lat])).dot(inter.T)
+#     print(is_pos_semi_def(inter.dot(np.linalg.inv(glob[:n_lat, :n_lat])).dot(inter.T)))
+#     samples = np.random.multivariate_normal(np.zeros(n_obs),
+#                                             np.linalg.inv(T_obs), n_samples)
+    A = make_sparse_spd_matrix(dim=n_obs + n_lat, alpha=sparsity_obs, random_state=random_state)
+
+    T_true = A[n_lat:,n_lat:]
+    K_true = A[n_lat:,:n_lat]
+    H_true = A[0:n_lat,0:n_lat]
+    per_cov = K_true*0.3
+    T_obs = T_true - per_cov.dot(np.linalg.inv(H_true)).dot(per_cov.T)
+    print(is_pos_semi_def(per_cov.dot(np.linalg.inv(H_true)).dot(per_cov.T)))
+    samples = np.random.multivariate_normal(np.zeros(n_obs), np.linalg.inv(T_obs), n_samples)
+
+    return T_obs, T_true, H_true, K_true, samples
 
 def is_pos_def(x, tol=1e-15):
     """Check if x is positive definite."""
